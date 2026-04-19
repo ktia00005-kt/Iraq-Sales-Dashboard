@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 import os
 
 # ==========================================
-# 0. 页面配置与 UI 样式 (新罗马字体 & 品牌色)
+# 0. 页面配置与 UI 样式 
 # ==========================================
 st.set_page_config(page_title="Iraq Executive CRM & BI", layout="wide", initial_sidebar_state="expanded")
 
@@ -22,8 +22,11 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# 💡 核心修复 1：更换全新的数据库文件名，彻底抛弃云端的残缺旧表
+DB_NAME = 'marsriva_iraq_v5_master.db'
+
 def get_db_connection():
-    return sqlite3.connect('marsriva_iraq_final_pro.db', check_same_thread=False)
+    return sqlite3.connect(DB_NAME, check_same_thread=False)
 
 def init_db():
     conn = get_db_connection()
@@ -36,44 +39,51 @@ def init_db():
 
 init_db()
 
+# 💡 核心修复 4：超级字典，兼容您原始表格中的所有奇葩表头
 COLUMN_MAP = {
-    'sale_date': 'sale_date', 'Date': 'sale_date', '日期': 'sale_date',
-    'client_name': 'client_name', 'Client': 'client_name', '客户': 'client_name',
+    'Date': 'sale_date', 'sale_date': 'sale_date', '日期': 'sale_date',
+    'Customer / Supplier en': 'client_name', 'Client': 'client_name', 'client_name': 'client_name', 'Customer / Supplier': 'client_name', '客户': 'client_name',
     'category': 'category', 'Category': 'category', '类目': 'category',
-    'model': 'model', 'Model': 'model', '型号': 'model',
-    'sold_qty': 'sold_qty', 'Quantity': 'sold_qty', '销量': 'sold_qty', 'Sales Quantity': 'sold_qty'
+    'Item Name': 'model', 'Model': 'model', 'model': 'model', '型号': 'model',
+    'Sales Quantity': 'sold_qty', 'Quantity': 'sold_qty', 'sold_qty': 'sold_qty', 'Qty': 'sold_qty', '销量': 'sold_qty'
 }
 
 # ==========================================
-# 1. 全局侧边栏 (管理中心：上传、清空、Logo)
+# 1. 全局侧边栏 (管理中心)
 # ==========================================
 st.sidebar.markdown("## ⚙️ Management")
 
-# 一键清空数据
-if st.sidebar.button("🗑️ Clear All Data", type="primary", use_container_width=True):
+# 💡 核心修复 2：核弹级清空按钮 (DROP TABLE)
+if st.sidebar.button("🗑️ Clear All Data (Reset System)", type="primary", use_container_width=True):
     conn = get_db_connection()
     c = conn.cursor()
-    c.execute("DELETE FROM sell_through")
+    c.execute("DROP TABLE IF EXISTS sell_through") # 彻底销毁整张表
     conn.commit()
     conn.close()
-    st.sidebar.success("Database Cleared!")
+    init_db() # 原地重新建一张完美的新表
+    st.sidebar.success("System Reset & Database Cleared!")
     st.rerun()
 
 st.sidebar.markdown("---")
 
 # 数据上传区
 st.sidebar.markdown("### 📥 Import Data")
-source_tag = st.sidebar.text_input("Batch Name", placeholder="e.g., April_Sales")
+source_tag = st.sidebar.text_input("Batch Name", placeholder="e.g., Q2_Sales")
 uploaded_file = st.sidebar.file_uploader("Upload Excel/CSV", type=["xlsx", "csv"])
 
 if uploaded_file:
     try:
         temp_df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
+        # 统一表头
         temp_df = temp_df.rename(columns=COLUMN_MAP)
+        
+        # 容错：如果没有 model 列，自动补齐
         if 'model' not in temp_df.columns: temp_df['model'] = "Unknown"
         
         req_cols = ['sale_date', 'client_name', 'category', 'sold_qty']
-        if all(c in temp_df.columns for c in req_cols):
+        missing_cols = [c for c in req_cols if c not in temp_df.columns]
+        
+        if not missing_cols:
             temp_df['sale_date'] = pd.to_datetime(temp_df['sale_date']).dt.strftime('%Y-%m-%d')
             if st.sidebar.button("Confirm Import ✔️", use_container_width=True):
                 temp_df['source_tag'] = source_tag if source_tag else "Batch"
@@ -82,9 +92,9 @@ if uploaded_file:
                 conn.close()
                 st.rerun()
         else:
-            st.sidebar.error(f"Missing required columns! Required: {req_cols}")
+            st.sidebar.error(f"Missing columns! Ensure your file has: {req_cols}")
     except Exception as e:
-        st.sidebar.error(f"Error: {e}")
+        st.sidebar.error(f"Error during file processing: {e}")
 
 # ==========================================
 # 2. 核心分析逻辑
@@ -96,11 +106,11 @@ raw_df = pd.read_sql("SELECT * FROM sell_through", conn)
 conn.close()
 
 if raw_df.empty:
-    st.info("👈 Please upload sales data in the sidebar to activate the dashboard.")
+    st.info("👈 System is ready. Please upload your sales data via the sidebar to activate the dashboard.")
 else:
     raw_df['sale_date'] = pd.to_datetime(raw_df['sale_date'])
     
-    # 顶部筛选器卡片
+    # 顶部筛选器
     st.markdown('<div class="filter-card">', unsafe_allow_html=True)
     c1, c2, c3 = st.columns(3)
     sel_cats = c1.multiselect("Category Filter", sorted(raw_df['category'].unique()), default=raw_df['category'].unique())
@@ -131,44 +141,46 @@ else:
         with tab1:
             trend_df = f_df.groupby([f_df['sale_date'].dt.to_period(res_code).astype(str), 'category'])['sold_qty'].sum().reset_index()
             fig = px.line(trend_df, x='sale_date', y='sold_qty', color='category', markers=True, template="plotly_white")
+            fig.update_layout(xaxis_title="Time", yaxis_title="Volume Sold")
             st.plotly_chart(fig, use_container_width=True)
 
-        # ★ 核心 CRM 面板 (修复了饼状图的 TypeError Bug)
+        # ★ 核心 CRM 面板 
         with tab2:
             st.markdown("### 📊 Client Deployment Matrix (Inv vs Bat)")
             crm_df = f_df[f_df['category'].str.contains('Inverter|Battery', case=False, na=False)].copy()
-            crm_df['Type'] = crm_df['category'].apply(lambda x: 'Inverter' if 'inv' in str(x).lower() else 'Battery')
             
-            client_pivot = crm_df.groupby(['client_name', 'Type'])['sold_qty'].sum().unstack(fill_value=0)
-            if 'Inverter' not in client_pivot.columns: client_pivot['Inverter'] = 0
-            if 'Battery' not in client_pivot.columns: client_pivot['Battery'] = 0
-            
-            client_pivot['Total'] = client_pivot['Inverter'] + client_pivot['Battery']
-            client_pivot = client_pivot.sort_values('Total', ascending=False)
-            client_pivot['Ratio (1:X)'] = client_pivot.apply(lambda r: f"1:{round(r['Battery']/r['Inverter'],1)}" if r['Inverter']>0 else "N/A", axis=1)
-            
-            # 显示主表 (带渐变色)
-            st.dataframe(client_pivot.style.format('{:,.0f}', subset=['Inverter', 'Battery', 'Total']).background_gradient(cmap='Blues', subset=['Total']), use_container_width=True)
-            
-            st.divider()
-            # 穿透分析循环
-            for client in client_pivot.index[:10]: # 展示前10名
-                with st.expander(f"🔍 Detail: {client}"):
-                    c_detail = crm_df[crm_df['client_name'] == client].copy()
-                    c_detail['Period'] = c_detail['sale_date'].dt.to_period(res_code).astype(str)
-                    
-                    col_p, col_t = st.columns([1, 2])
-                    with col_p:
-                        # 💡 就在这里！补上了关键的 color='Type'
-                        pie_data = c_detail.groupby('Type')['sold_qty'].sum().reset_index()
-                        pie = px.pie(pie_data, values='sold_qty', names='Type', color='Type', hole=0.5, color_discrete_map={'Inverter':'#0f172a','Battery':'#00B2A9'})
-                        pie.update_layout(showlegend=False, height=200, margin=dict(t=0,b=0,l=0,r=0))
-                        st.plotly_chart(pie, use_container_width=True, key=f"pie_{client}")
+            if not crm_df.empty:
+                crm_df['Type'] = crm_df['category'].apply(lambda x: 'Inverter' if 'inv' in str(x).lower() else 'Battery')
+                
+                client_pivot = crm_df.groupby(['client_name', 'Type'])['sold_qty'].sum().unstack(fill_value=0)
+                if 'Inverter' not in client_pivot.columns: client_pivot['Inverter'] = 0
+                if 'Battery' not in client_pivot.columns: client_pivot['Battery'] = 0
+                
+                client_pivot['Total'] = client_pivot['Inverter'] + client_pivot['Battery']
+                client_pivot = client_pivot.sort_values('Total', ascending=False)
+                client_pivot['Ratio (1:X)'] = client_pivot.apply(lambda r: f"1:{round(r['Battery']/r['Inverter'],1)}" if r['Inverter']>0 else "N/A", axis=1)
+                
+                # 💡 核心修复 3：去除了 matplotlib 渐变色，保证绝对不报错
+                st.dataframe(client_pivot.style.format('{:,.0f}', subset=['Inverter', 'Battery', 'Total']), use_container_width=True)
+                
+                st.divider()
+                st.markdown("#### 🔍 Double-click expander for Client Deep-Dive")
+                for client in client_pivot.index[:15]: 
+                    with st.expander(f"Detail: {client} (Total: {client_pivot.loc[client, 'Total']:,.0f})"):
+                        c_detail = crm_df[crm_df['client_name'] == client].copy()
+                        c_detail['Period'] = c_detail['sale_date'].dt.to_period(res_code).astype(str)
                         
-                    with col_t:
-                        model_pv = c_detail.pivot_table(index='Period', columns='model', values='sold_qty', aggfunc='sum', fill_value=0)
-                        # 渐变色明细表
-                        st.dataframe(model_pv.style.format('{:,.0f}').background_gradient(cmap='Blues'), use_container_width=True)
+                        col_p, col_t = st.columns([1, 2])
+                        with col_p:
+                            pie_data = c_detail.groupby('Type')['sold_qty'].sum().reset_index()
+                            pie = px.pie(pie_data, values='sold_qty', names='Type', color='Type', hole=0.5, color_discrete_map={'Inverter':'#0f172a','Battery':'#00B2A9'})
+                            pie.update_layout(showlegend=False, height=200, margin=dict(t=0,b=0,l=0,r=0))
+                            st.plotly_chart(pie, use_container_width=True, key=f"pie_{client}")
+                        with col_t:
+                            model_pv = c_detail.pivot_table(index='Period', columns='model', values='sold_qty', aggfunc='sum', fill_value=0)
+                            st.dataframe(model_pv.style.format('{:,.0f}'), use_container_width=True)
+            else:
+                st.info("No Inverter or Battery sales data found in the current selection.")
 
         with tab3:
             st.markdown("### 🚨 Churn & Decline Radar")
@@ -179,12 +191,19 @@ else:
                 decline = p_df[p_df['Drop'] < 0].sort_values('Drop')
                 
                 if not decline.empty:
+                    st.markdown(f"Comparing **{curr}** against **{prev}**")
                     st.dataframe(decline[['Drop']].style.format('{:,.0f}').map(lambda x: 'color: red; font-weight: bold;'), use_container_width=True)
                     fig_alert = px.bar(decline.reset_index().head(10), x='Drop', y='client_name', orientation='h', color_discrete_sequence=['#ef4444'])
+                    fig_alert.update_layout(xaxis_title="Volume Drop", yaxis_title="Client")
                     st.plotly_chart(fig_alert, use_container_width=True)
                 else:
                     st.success("Great news! No clients showed a decline in volume.")
-            else: st.info("Need at least 2 periods for decline analysis.")
+            else: 
+                st.info("Need at least 2 time periods to calculate decline.")
 
         with tab4:
-            st.plotly_chart(px.bar(f_df.groupby('model')['sold_qty'].sum().nlargest(20).reset_index(), x='sold_qty', y='model', orientation='h', text_auto='.2s', color_discrete_sequence=['#0f172a']), use_container_width=True)
+            st.markdown("### 🏆 Top 20 Models Overall")
+            top_models = f_df.groupby('model')['sold_qty'].sum().nlargest(20).reset_index()
+            fig_bar = px.bar(top_models, x='sold_qty', y='model', orientation='h', text_auto='.2s', color_discrete_sequence=['#0f172a'])
+            fig_bar.update_layout(yaxis={'categoryorder':'total ascending'}, xaxis_title="Total Quantity", yaxis_title="Model")
+            st.plotly_chart(fig_bar, use_container_width=True)

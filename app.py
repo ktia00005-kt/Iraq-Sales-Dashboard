@@ -25,7 +25,7 @@ st.markdown(f"""
 </style>
 """, unsafe_allow_html=True)
 
-DB_NAME = 'marsriva_iraq_v11_master.db'
+DB_NAME = 'marsriva_iraq_v12_master.db'
 
 def get_db_connection():
     return sqlite3.connect(DB_NAME, timeout=10, check_same_thread=False)
@@ -41,12 +41,13 @@ def init_db():
 
 init_db()
 
+# 💡 注意：全部改为小写，配合暴力清洗机使用
 COLUMN_MAP = {
-    'Date': 'sale_date', 'sale_date': 'sale_date', '日期': 'sale_date',
-    'Customer / Supplier en': 'client_name', 'Client': 'client_name', 'client_name': 'client_name', 'Customer / Supplier': 'client_name', '客户': 'client_name',
-    'category': 'category', 'Category': 'category', '类目': 'category',
-    'Item Name': 'model', 'Model': 'model', 'model': 'model', '型号': 'model',
-    'Sales Quantity': 'sold_qty', 'Quantity': 'sold_qty', 'sold_qty': 'sold_qty', 'Qty': 'sold_qty', '销量': 'sold_qty'
+    'date': 'sale_date', 'sale_date': 'sale_date', '日期': 'sale_date',
+    'customer / supplier en': 'client_name', 'client': 'client_name', 'client_name': 'client_name', 'customer / supplier': 'client_name', '客户': 'client_name',
+    'category': 'category', '类目': 'category',
+    'item name': 'model', 'model': 'model', '型号': 'model',
+    'sales quantity': 'sold_qty', 'quantity': 'sold_qty', 'sold_qty': 'sold_qty', 'qty': 'sold_qty', '销量': 'sold_qty'
 }
 
 # ==========================================
@@ -74,23 +75,33 @@ with st.sidebar.form("data_import_form", clear_on_submit=True):
     if submit_btn and uploaded_file:
         try:
             temp_df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
+            
+            # 🔪 终极暴力清洗机：去空格、转小写、除换行！让幽灵空格彻底消失！
+            temp_df.columns = temp_df.columns.astype(str).str.strip().str.lower().str.replace('\n', '').str.replace('\r', '')
+            
             temp_df = temp_df.rename(columns=COLUMN_MAP)
+            
             if 'model' not in temp_df.columns: temp_df['model'] = "Unknown"
             
             req_cols = ['sale_date', 'client_name', 'category', 'sold_qty']
-            if all(c in temp_df.columns for c in req_cols):
+            missing_cols = [c for c in req_cols if c not in temp_df.columns]
+            
+            if not missing_cols:
                 temp_df['sale_date'] = pd.to_datetime(temp_df['sale_date'], errors='coerce').dt.strftime('%Y-%m-%d')
-                
-                # 💡 就是这里！补上了丢失的这一行，不再报错 not in index 了！
                 temp_df['source_tag'] = source_tag if source_tag else "Batch"
                 
                 conn = get_db_connection()
                 temp_df[['sale_date', 'client_name', 'category', 'model', 'sold_qty', 'source_tag']].to_sql("sell_through", conn, if_exists='append', index=False)
                 conn.close()
-                st.success("Success!")
+                st.success("Data Imported Successfully!")
                 st.rerun()
-            else: st.error("Missing columns!")
-        except Exception as e: st.error(f"Error: {e}")
+            else: 
+                # 👁️ 透视眼功能：如果还报错，直接把文件里的表头打印出来给您看！
+                st.error(f"❌ Missing required columns: {missing_cols}")
+                st.warning(f"🔍 System detected these columns in your file: {list(temp_df.columns)}")
+                st.info("Please check if your Excel headers match the required names.")
+        except Exception as e: 
+            st.error(f"Error during import: {e}")
 
 # ==========================================
 # 2. 主看板逻辑
@@ -137,7 +148,6 @@ else:
         with tab1:
             col_m1, col_m2 = st.columns([1.5, 1])
             
-            # 1. 总体配比饼图 (防崩溃保护)
             with col_m2:
                 st.markdown("#### Overall Purchase Ratio")
                 market_crm = f_df[f_df['category'].str.contains('Inverter|Battery', case=False, na=False)].copy()
@@ -151,7 +161,6 @@ else:
                 else:
                     st.info("No Inverter or Battery data available for pie chart.")
 
-            # 2. 趋势线
             with col_m1:
                 st.markdown(f"#### Sales Trajectory ({time_gran})")
                 trend_df = f_df.groupby([f_df['sale_date'].dt.to_period(res_code).astype(str), 'category'])['sold_qty'].sum().reset_index()
@@ -161,15 +170,17 @@ else:
                 fig_line.update_layout(template="plotly_white", height=350, xaxis_title="", yaxis_title="Units Sold")
                 st.plotly_chart(fig_line, use_container_width=True)
 
-            # 3. 月度采购量明细表 
             st.divider()
             st.markdown("#### Monthly Sales Volume Data Table")
             monthly_table = f_df.groupby([f_df['sale_date'].dt.to_period('M').astype(str), 'category'])['sold_qty'].sum().unstack(fill_value=0)
-            monthly_table['Total'] = monthly_table.sum(axis=1)
-            try:
-                st.dataframe(monthly_table.style.format('{:,.0f}').background_gradient(cmap='GnBu', axis=0), use_container_width=True)
-            except Exception:
-                st.dataframe(monthly_table.style.format('{:,.0f}'), use_container_width=True)
+            if not monthly_table.empty:
+                monthly_table['Total'] = monthly_table.sum(axis=1)
+                try:
+                    st.dataframe(monthly_table.style.format('{:,.0f}').background_gradient(cmap='GnBu', axis=0), use_container_width=True)
+                except Exception:
+                    st.dataframe(monthly_table.style.format('{:,.0f}'), use_container_width=True)
+            else:
+                st.info("No monthly data available.")
 
         # ==========================================
         # TAB 2: CRM Matrix
@@ -195,7 +206,6 @@ else:
                         c_detail = crm_df[crm_df['client_name'] == client].copy()
                         c_detail['Period'] = c_detail['sale_date'].dt.to_period(res_code).astype(str)
                         
-                        # 💡 竖向排列 Model，横向排列表格日期
                         model_matrix = c_detail.pivot_table(index='model', columns='Period', values='sold_qty', aggfunc='sum', fill_value=0)
                         try:
                             st.dataframe(model_matrix.style.format('{:,.0f}').background_gradient(cmap='GnBu', axis=1), use_container_width=True)
@@ -220,5 +230,4 @@ else:
                     st.plotly_chart(px.bar(decline.reset_index().head(10), x='Drop', y='client_name', orientation='h', color_discrete_sequence=['#ef4444']), use_container_width=True)
                 else:
                     st.success("Great news! No clients showed a decline in volume.")
-            else: 
-                st.info("Need more data periods to calculate decline.")
+            else: st.info("Need more data periods to calculate decline.")

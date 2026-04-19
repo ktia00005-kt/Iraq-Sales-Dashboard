@@ -49,7 +49,7 @@ def init_db():
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS sell_through (
                  id INTEGER PRIMARY KEY AUTOINCREMENT,
-                 sale_date DATE, client_name TEXT, category TEXT, model TEXT, power_segment TEXT, sold_qty REAL, source_tag TEXT)''')
+                 sale_date DATE, client_name TEXT, category TEXT, model TEXT, sold_qty REAL, source_tag TEXT)''')
     conn.commit()
     conn.close()
 
@@ -60,7 +60,6 @@ COLUMN_MAP = {
     'client_name': 'client_name', 'Client': 'client_name', '客户': 'client_name',
     'category': 'category', 'Category': 'category', '类目': 'category',
     'model': 'model', 'Model': 'model', '型号': 'model',
-    'power_segment': 'power_segment', 'Power Segment': 'power_segment', '功率段': 'power_segment',
     'sold_qty': 'sold_qty', 'Quantity': 'sold_qty', '销量': 'sold_qty'
 }
 
@@ -171,7 +170,6 @@ if menu == "📈 Performance Dashboard":
                     with c_v1:
                         st.caption(f"Top Movers for **{latest_p}**")
                         if not g_latest.empty:
-                            # 替换颜色：增长为品牌青色，下降为石板灰
                             g_latest['Color'] = g_latest['Net Change'].apply(lambda x: '#475569' if x < 0 else '#00B2A9')
                             top_movers = g_latest.assign(Abs=g_latest['Net Change'].abs()).nlargest(15, 'Abs')
                             fig_bar = px.bar(top_movers, x='Net Change', y='Client', color='Color', orientation='h',
@@ -183,7 +181,7 @@ if menu == "📈 Performance Dashboard":
                         st.caption("Full Variance Ledger")
                         def highlight_variance(val):
                             if isinstance(val, (int, float)):
-                                if val < 0: return 'color: #475569; font-weight: bold;' # 高级石板灰
+                                if val < 0: return 'color: #475569; font-weight: bold;'
                                 elif val > 0: return 'color: #0f172a;'
                             return ''
                         
@@ -199,20 +197,14 @@ if menu == "📈 Performance Dashboard":
                 st.markdown("### Product Growth Trajectory")
                 st.caption("Select specific dimensions to view their overall growth trend.")
                 
-                c_t1, c_t2, c_t3 = st.columns(3)
+                c_t1, c_t2 = st.columns(2)
                 with c_t1:
                     t_cat = st.selectbox("Select Category", ["All"] + sorted(f_df['category'].unique().tolist()))
                 with c_t2:
-                    if 'power_segment' in f_df.columns:
-                        t_pow = st.selectbox("Select Power Segment", ["All"] + sorted(f_df['power_segment'].dropna().unique().tolist()))
-                    else:
-                        t_pow = "All"
-                with c_t3:
                     t_mod = st.selectbox("Select Model", ["All"] + sorted(f_df['model'].dropna().unique().tolist()))
                 
                 dd_df = f_df.copy()
                 if t_cat != "All": dd_df = dd_df[dd_df['category'] == t_cat]
-                if t_pow != "All": dd_df = dd_df[dd_df['power_segment'] == t_pow]
                 if t_mod != "All": dd_df = dd_df[dd_df['model'] == t_mod]
                 
                 if not dd_df.empty:
@@ -251,7 +243,7 @@ if menu == "📈 Performance Dashboard":
                     st.markdown("### Detailed Monthly Purchase Log")
                     st.caption("Month-by-month breakdown of Battery and Inverter purchases per client.")
                     
-                    # 2. 客户明细透视表 (已修复格式化容错 Bug)
+                    # 2. 客户明细透视表
                     monthly_detail = bi_df.groupby(['client_name', bi_df['sale_date'].dt.to_period('M').astype(str), 'category'])['sold_qty'].sum().unstack(fill_value=0).reset_index()
                     monthly_detail.rename(columns={'client_name': 'Client', 'sale_date': 'Month'}, inplace=True)
                     monthly_detail = monthly_detail.sort_values(by=['Client', 'Month'])
@@ -268,6 +260,22 @@ if menu == "📈 Performance Dashboard":
 elif menu == "📤 Data Terminal":
     st.markdown("<h1>Data <span>Terminal</span></h1>", unsafe_allow_html=True)
     
+    # --- 新增：清除数据功能 ---
+    st.markdown("### 🛠️ Database Management")
+    with st.expander("⚠️ Danger Zone: Clear Database"):
+        st.warning("This action will completely erase all imported records from the database. It cannot be undone.")
+        if st.button("🗑️ Clear All Data", type="primary", use_container_width=True):
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute("DELETE FROM sell_through")
+            conn.commit()
+            conn.close()
+            st.success("All data has been successfully cleared! You can now upload fresh data.")
+            st.rerun()
+            
+    st.markdown("---")
+    st.markdown("### 📥 Import New Data")
+    
     with st.container():
         st.markdown('<div class="filter-card">', unsafe_allow_html=True)
         col_u1, col_u2 = st.columns([1, 2])
@@ -282,12 +290,12 @@ elif menu == "📤 Data Terminal":
             temp_df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
             temp_df = temp_df.rename(columns=COLUMN_MAP)
             
-            # 容错：如果上传表格没有 power_segment 或 model 列，自动填充
-            for col in ['power_segment', 'model']:
+            # 容错：如果上传表格没有 model 列，自动填充
+            for col in ['model']:
                 if col not in temp_df.columns: 
                     temp_df[col] = "Unknown"
             
-            # 必须字段的检查 (修复上一版漏掉的致命错)
+            # 必须字段的检查
             req_cols = ['sale_date', 'client_name', 'category', 'sold_qty']
             missing_reqs = [c for c in req_cols if c not in temp_df.columns]
             
@@ -302,8 +310,9 @@ elif menu == "📤 Data Terminal":
                 if st.button("Initialize & Append to Database", use_container_width=True):
                     temp_df['source_tag'] = source_tag
                     conn = get_db_connection()
-                    # 容错提取：只保存数据库需要的且临时表里实际存在的列
-                    db_cols = ['sale_date', 'client_name', 'category', 'model', 'power_segment', 'sold_qty', 'source_tag']
+                    
+                    # 容错提取：只保存数据库需要的且临时表里实际存在的列 (去除了 power_segment)
+                    db_cols = ['sale_date', 'client_name', 'category', 'model', 'sold_qty', 'source_tag']
                     cols_to_save = [c for c in db_cols if c in temp_df.columns]
                     
                     temp_df[cols_to_save].to_sql("sell_through", conn, if_exists='append', index=False)

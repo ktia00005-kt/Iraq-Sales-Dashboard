@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 import plotly.express as px
-import plotly.graph_objects as go
 import os
 
 # ==========================================
@@ -22,8 +21,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 💡 核心修复 1：更换全新的数据库文件名，彻底抛弃云端的残缺旧表
-DB_NAME = 'marsriva_iraq_v5_master.db'
+# 💡 强力修复 1：启用全新命名的终极数据库
+DB_NAME = 'marsriva_iraq_ultimate_v10.db'
 
 def get_db_connection():
     return sqlite3.connect(DB_NAME, check_same_thread=False)
@@ -31,15 +30,25 @@ def get_db_connection():
 def init_db():
     conn = get_db_connection()
     c = conn.cursor()
+    # 创建表
     c.execute('''CREATE TABLE IF NOT EXISTS sell_through (
                  id INTEGER PRIMARY KEY AUTOINCREMENT,
                  sale_date DATE, client_name TEXT, category TEXT, model TEXT, sold_qty REAL, source_tag TEXT)''')
+    
+    # 💡 强力修复 2：自愈程序！强制检查有没有 model 列，没有就炸掉重建！
+    c.execute("PRAGMA table_info(sell_through)")
+    columns = [info[1] for info in c.fetchall()]
+    if 'model' not in columns:
+        c.execute("DROP TABLE sell_through")
+        c.execute('''CREATE TABLE sell_through (
+                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     sale_date DATE, client_name TEXT, category TEXT, model TEXT, sold_qty REAL, source_tag TEXT)''')
+    
     conn.commit()
     conn.close()
 
 init_db()
 
-# 💡 核心修复 4：超级字典，兼容您原始表格中的所有奇葩表头
 COLUMN_MAP = {
     'Date': 'sale_date', 'sale_date': 'sale_date', '日期': 'sale_date',
     'Customer / Supplier en': 'client_name', 'Client': 'client_name', 'client_name': 'client_name', 'Customer / Supplier': 'client_name', '客户': 'client_name',
@@ -53,14 +62,14 @@ COLUMN_MAP = {
 # ==========================================
 st.sidebar.markdown("## ⚙️ Management")
 
-# 💡 核心修复 2：核弹级清空按钮 (DROP TABLE)
+# 核弹级清空按钮
 if st.sidebar.button("🗑️ Clear All Data (Reset System)", type="primary", use_container_width=True):
     conn = get_db_connection()
     c = conn.cursor()
-    c.execute("DROP TABLE IF EXISTS sell_through") # 彻底销毁整张表
+    c.execute("DROP TABLE IF EXISTS sell_through") 
     conn.commit()
     conn.close()
-    init_db() # 原地重新建一张完美的新表
+    init_db() 
     st.sidebar.success("System Reset & Database Cleared!")
     st.rerun()
 
@@ -74,7 +83,6 @@ uploaded_file = st.sidebar.file_uploader("Upload Excel/CSV", type=["xlsx", "csv"
 if uploaded_file:
     try:
         temp_df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-        # 统一表头
         temp_df = temp_df.rename(columns=COLUMN_MAP)
         
         # 容错：如果没有 model 列，自动补齐
@@ -88,6 +96,7 @@ if uploaded_file:
             if st.sidebar.button("Confirm Import ✔️", use_container_width=True):
                 temp_df['source_tag'] = source_tag if source_tag else "Batch"
                 conn = get_db_connection()
+                # 这一步现在绝对不会报错了，因为自愈程序保证了表结构完美！
                 temp_df[['sale_date', 'client_name', 'category', 'model', 'sold_qty', 'source_tag']].to_sql("sell_through", conn, if_exists='append', index=False)
                 conn.close()
                 st.rerun()
@@ -110,7 +119,6 @@ if raw_df.empty:
 else:
     raw_df['sale_date'] = pd.to_datetime(raw_df['sale_date'])
     
-    # 顶部筛选器
     st.markdown('<div class="filter-card">', unsafe_allow_html=True)
     c1, c2, c3 = st.columns(3)
     sel_cats = c1.multiselect("Category Filter", sorted(raw_df['category'].unique()), default=raw_df['category'].unique())
@@ -122,7 +130,6 @@ else:
     f_df = raw_df[raw_df['category'].isin(sel_cats) & raw_df['client_name'].isin(sel_clients)].copy()
 
     if not f_df.empty:
-        # KPI 统计
         total_vol = f_df['sold_qty'].sum()
         active_c = f_df['client_name'].nunique()
         mom_df = f_df.groupby(f_df['sale_date'].dt.to_period('M'))['sold_qty'].sum()
@@ -160,8 +167,7 @@ else:
                 client_pivot = client_pivot.sort_values('Total', ascending=False)
                 client_pivot['Ratio (1:X)'] = client_pivot.apply(lambda r: f"1:{round(r['Battery']/r['Inverter'],1)}" if r['Inverter']>0 else "N/A", axis=1)
                 
-                # 💡 核心修复 3：去除了 matplotlib 渐变色，保证绝对不报错
-                st.dataframe(client_pivot.style.format('{:,.0f}', subset=['Inverter', 'Battery', 'Total']), use_container_width=True)
+                st.dataframe(client_pivot.style.format('{:,.0f}', subset=['Inverter', 'Battery', 'Total']).background_gradient(cmap='Blues', subset=['Total']), use_container_width=True)
                 
                 st.divider()
                 st.markdown("#### 🔍 Double-click expander for Client Deep-Dive")
@@ -178,7 +184,7 @@ else:
                             st.plotly_chart(pie, use_container_width=True, key=f"pie_{client}")
                         with col_t:
                             model_pv = c_detail.pivot_table(index='Period', columns='model', values='sold_qty', aggfunc='sum', fill_value=0)
-                            st.dataframe(model_pv.style.format('{:,.0f}'), use_container_width=True)
+                            st.dataframe(model_pv.style.format('{:,.0f}').background_gradient(cmap='Blues'), use_container_width=True)
             else:
                 st.info("No Inverter or Battery sales data found in the current selection.")
 

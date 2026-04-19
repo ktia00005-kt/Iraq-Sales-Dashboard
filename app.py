@@ -53,6 +53,14 @@ COLUMN_MAP = {
 # ==========================================
 # 1. 侧边栏管理
 # ==========================================
+# 🌟 智能 Logo 展示区
+if os.path.exists("logo.png"):
+    st.sidebar.image("logo.png", use_container_width=True)
+elif os.path.exists("logo.jpg"):
+    st.sidebar.image("logo.jpg", use_container_width=True)
+elif os.path.exists("Logo-2a.jpg"): # 兼容您早期上传过的图片名
+    st.sidebar.image("Logo-2a.jpg", use_container_width=True)
+
 st.sidebar.markdown("## ⚙️ Management")
 
 if st.sidebar.button("🗑️ Reset Database", type="primary", use_container_width=True):
@@ -157,35 +165,26 @@ else:
             except Exception:
                 st.dataframe(monthly_tbl.style.format('{:,.0f}'), use_container_width=True)
 
-        # ==========================================
-        # TAB 2: CRM Matrix (核心升级区域)
-        # ==========================================
         with tab2:
             st.markdown("### 📋 Executive CRM: Client Ranking & Matrix")
             crm_df = f_df[f_df['category'].fillna('').str.contains('Inverter|Battery', case=False)].copy()
             
             if not crm_df.empty:
-                # 1. 数据拆分：将 category 归类为 Inverter 和 Battery
                 crm_df['Product_Type'] = ['Inverter' if 'inv' in str(c).lower() else 'Battery' for c in crm_df['category']]
-                
-                # 2. 透视计算每个客户的逆变器和电池销量
                 client_pivot = crm_df.groupby(['client_name', 'Product_Type'])['sold_qty'].sum().unstack(fill_value=0)
                 if 'Inverter' not in client_pivot.columns: client_pivot['Inverter'] = 0
                 if 'Battery' not in client_pivot.columns: client_pivot['Battery'] = 0
                 
-                # 3. 计算总计并排序
                 client_pivot['Total Volume'] = client_pivot['Inverter'] + client_pivot['Battery']
                 client_pivot = client_pivot.sort_values('Total Volume', ascending=False).reset_index()
                 client_pivot.rename(columns={'client_name': 'Client'}, inplace=True)
                 
-                # 4. 计算配比 (Ratio)
                 def calculate_ratio(inv, bat):
                     if inv > 0: return f"1 : {round(bat/inv, 1)}"
                     if bat > 0: return "0 : All Battery"
                     return "0 : 0"
                 client_pivot['Ratio (Inv:Bat)'] = client_pivot.apply(lambda r: calculate_ratio(r['Inverter'], r['Battery']), axis=1)
                 
-                # 5. 展示顶部的全客户排行榜
                 st.markdown("#### 🏆 Client Ranking (All Clients)")
                 st.dataframe(
                     client_pivot[['Client', 'Inverter', 'Battery', 'Total Volume', 'Ratio (Inv:Bat)']].style.format({
@@ -194,19 +193,17 @@ else:
                         'Total Volume': '{:,.0f}'
                     }),
                     use_container_width=True,
-                    height=400 # 给一个固定的高度，方便上下滚动查看所有客户
+                    height=400 
                 )
                 
                 st.markdown("---")
                 st.markdown("#### 🔍 Client Deep-Dive (Model Purchase Matrix)")
                 
-                # 6. 循环遍历所有客户展示明细透视表 (移除了条数限制，展示所有人)
                 for client in client_pivot['Client']:
                     total_vol = client_pivot[client_pivot['Client'] == client]['Total Volume'].values[0]
                     with st.expander(f"🏢 {client} | Total Volume: {total_vol:,.0f}"):
                         c_detail = crm_df[crm_df['client_name'] == client].copy()
                         c_detail['Period'] = c_detail['sale_date'].dt.to_period(res_code).astype(str)
-                        # Model在左侧，日期在上方
                         matrix = c_detail.pivot_table(index='model', columns='Period', values='sold_qty', aggfunc='sum', fill_value=0)
                         try:
                             st.dataframe(matrix.style.format('{:,.0f}').background_gradient(cmap='GnBu', axis=1), use_container_width=True)

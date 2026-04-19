@@ -5,7 +5,7 @@ import plotly.express as px
 import os
 
 # ==========================================
-# 0. UI 配置 (更名为 IRAQ ST CRM ANALYSIS)
+# 0. UI 配置 (IRAQ ST CRM ANALYSIS)
 # ==========================================
 st.set_page_config(page_title="IRAQ ST CRM ANALYSIS", layout="wide", initial_sidebar_state="expanded")
 
@@ -24,7 +24,8 @@ st.markdown(f"""
 </style>
 """, unsafe_allow_html=True)
 
-DB_NAME = 'marsriva_iraq_v13_final.db'
+# 强制换用 v14 数据库，摆脱所有缓存干扰
+DB_NAME = 'marsriva_iraq_v14_bulletproof.db'
 
 def get_db_connection():
     return sqlite3.connect(DB_NAME, timeout=10, check_same_thread=False)
@@ -40,10 +41,10 @@ def init_db():
 
 init_db()
 
-# 暴力匹配字典
+# 暴力表头清洗字典
 COLUMN_MAP = {
     'date': 'sale_date', 'sale_date': 'sale_date', '日期': 'sale_date',
-    'customer / supplier en': 'client_name', 'client': 'client_name', 'client_name': 'client_name', '客户名称': 'client_name',
+    'customer / supplier en': 'client_name', 'client': 'client_name', 'client_name': 'client_name', 'customer / supplier': 'client_name', '客户名称': 'client_name',
     'category': 'category', 'category ': 'category', '类目': 'category',
     'item name': 'model', 'model': 'model', '型号': 'model',
     'sales quantity': 'sold_qty', 'quantity': 'sold_qty', 'sold_qty': 'sold_qty', 'qty': 'sold_qty', '销量': 'sold_qty'
@@ -60,7 +61,7 @@ if st.sidebar.button("🗑️ Reset Database", type="primary", use_container_wid
     c.execute("DELETE FROM sell_through")
     conn.commit()
     conn.close()
-    st.sidebar.success("Database Reset!")
+    st.sidebar.success("Database Reset Successful!")
     st.rerun()
 
 st.sidebar.markdown("---")
@@ -74,8 +75,9 @@ with st.sidebar.form("import_form", clear_on_submit=True):
     if submit_btn and uploaded_file:
         try:
             temp_df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-            # 清洗列名
-            temp_df.columns = temp_df.columns.astype(str).str.strip().str.lower()
+            
+            # 清除所有空格和换行
+            temp_df.columns = temp_df.columns.astype(str).str.strip().str.lower().str.replace('\n', '').str.replace('\r', '')
             temp_df = temp_df.rename(columns=COLUMN_MAP)
             
             req_cols = ['sale_date', 'client_name', 'category', 'sold_qty']
@@ -87,11 +89,13 @@ with st.sidebar.form("import_form", clear_on_submit=True):
                 conn = get_db_connection()
                 temp_df[['sale_date', 'client_name', 'category', 'model', 'sold_qty', 'source_tag']].to_sql("sell_through", conn, if_exists='append', index=False)
                 conn.close()
-                st.sidebar.success("Data Imported!")
+                st.sidebar.success("Data Uploaded!")
                 st.rerun()
             else:
-                st.sidebar.error(f"Mismatch! Missing: {[c for c in req_cols if c not in temp_df.columns]}")
-        except Exception as e: st.sidebar.error(f"Error: {e}")
+                missing = [c for c in req_cols if c not in temp_df.columns]
+                st.sidebar.error(f"Mismatch! Missing columns: {missing}")
+        except Exception as e: 
+            st.sidebar.error(f"Error: {e}")
 
 # ==========================================
 # 2. 核心分析逻辑
@@ -105,12 +109,13 @@ conn.close()
 if raw_df.empty:
     st.info("👈 Please upload data to activate the analysis.")
 else:
-    raw_df['sale_date'] = pd.to_datetime(raw_df['sale_date'])
+    raw_df['sale_date'] = pd.to_datetime(raw_df['sale_date'], errors='coerce')
+    raw_df = raw_df.dropna(subset=['sale_date'])
     
     st.markdown('<div class="filter-card">', unsafe_allow_html=True)
     c1, c2, c3 = st.columns(3)
-    sel_cats = c1.multiselect("Category", sorted(raw_df['category'].unique()), default=raw_df['category'].unique())
-    sel_clients = c2.multiselect("Clients", sorted(raw_df['client_name'].unique()), default=raw_df['client_name'].unique())
+    sel_cats = c1.multiselect("Category", sorted(raw_df['category'].fillna('Unknown').unique()), default=raw_df['category'].fillna('Unknown').unique())
+    sel_clients = c2.multiselect("Clients", sorted(raw_df['client_name'].fillna('Unknown').unique()), default=raw_df['client_name'].fillna('Unknown').unique())
     time_gran = c3.selectbox("Time Granularity", ["Monthly", "Quarterly"])
     res_code = 'M' if time_gran == "Monthly" else 'Q'
     st.markdown('</div>', unsafe_allow_html=True)
@@ -135,12 +140,21 @@ else:
             
             with col_r:
                 st.markdown("#### Overall Mix (Inv vs Bat)")
-                market_crm = f_df[f_df['category'].str.contains('Inverter|Battery', case=False, na=False)].copy()
-                if not market_crm.empty:
-                    # 💡 修复 KeyError：先创建列再检查
-                    market_crm['Macro Type'] = market_crm['category'].apply(lambda x: 'Inverter' if 'inv' in str(x).lower() else 'Battery')
-                    pie_data = market_crm.groupby('Macro Type')['sold_qty'].sum().reset_index()
-                    st.plotly_chart(px.pie(pie_data, values='sold_qty', names='Macro Type', hole=0.5, color_discrete_map={'Inverter': DARK_COLOR, 'Battery': BRAND_COLOR}), use_container_width=True)
+                # 💡 核物理级防崩溃：全新且绝对安全的饼图生成方式
+                market_source = f_df[f_df['category'].fillna('').str.contains('Inverter|Battery', case=False)].copy()
+                
+                if len(market_source) > 0:
+                    # 使用纯 Python 列表，绝对不会触发 DataFrame 列报错
+                    clean_types = ['Inverter' if 'inv' in str(c).lower() else 'Battery' for c in market_source['category']]
+                    
+                    # 凭空捏造一个干净的数据框来画图，彻底断绝联系
+                    safe_pie_df = pd.DataFrame({
+                        'Product_Type': clean_types,
+                        'Qty': market_source['sold_qty'].values
+                    })
+                    pie_summary = safe_pie_df.groupby('Product_Type', as_index=False)['Qty'].sum()
+                    
+                    st.plotly_chart(px.pie(pie_summary, values='Qty', names='Product_Type', hole=0.5, color='Product_Type', color_discrete_map={'Inverter': DARK_COLOR, 'Battery': BRAND_COLOR}), use_container_width=True)
                 else:
                     st.info("No Inv/Bat data found for ratio chart.")
             
@@ -148,13 +162,19 @@ else:
             st.markdown("#### Monthly Detailed Performance Table")
             monthly_tbl = f_df.groupby([f_df['sale_date'].dt.to_period('M').astype(str), 'category'])['sold_qty'].sum().unstack(fill_value=0)
             monthly_tbl['Total'] = monthly_tbl.sum(axis=1)
-            st.dataframe(monthly_tbl.style.format('{:,.0f}').background_gradient(cmap='GnBu', axis=0), use_container_width=True)
+            try:
+                st.dataframe(monthly_tbl.style.format('{:,.0f}').background_gradient(cmap='GnBu', axis=0), use_container_width=True)
+            except Exception:
+                st.dataframe(monthly_tbl.style.format('{:,.0f}'), use_container_width=True)
 
         with tab2:
             st.markdown("### 📋 Executive CRM: Model-Time Matrix")
-            crm_df = f_df[f_df['category'].str.contains('Inverter|Battery', case=False, na=False)].copy()
+            crm_df = f_df[f_df['category'].fillna('').str.contains('Inverter|Battery', case=False)].copy()
             
             if not crm_df.empty:
+                # 极度安全的重命名和配比逻辑
+                crm_df['Product_Type'] = ['Inverter' if 'inv' in str(c).lower() else 'Battery' for c in crm_df['category']]
+                
                 # 总体排名
                 client_rank = crm_df.groupby('client_name')['sold_qty'].sum().sort_values(ascending=False).reset_index()
                 client_rank.columns = ['Client', 'Total Inv & Bat Volume']
@@ -163,11 +183,14 @@ else:
                 st.markdown("---")
                 for client in client_rank['Client'].unique()[:15]:
                     with st.expander(f"🏢 {client} | Deep-Dive Model Purchase History"):
-                        c_detail = crm_df[crm_df['client_name'] == client]
+                        c_detail = crm_df[crm_df['client_name'] == client].copy()
                         c_detail['Period'] = c_detail['sale_date'].dt.to_period(res_code).astype(str)
-                        # 💡 核心改动：Model 在左侧，日期在上方
+                        # 确保 Model 在左侧，Period 在上方
                         matrix = c_detail.pivot_table(index='model', columns='Period', values='sold_qty', aggfunc='sum', fill_value=0)
-                        st.dataframe(matrix.style.format('{:,.0f}').background_gradient(cmap='GnBu', axis=1), use_container_width=True)
+                        try:
+                            st.dataframe(matrix.style.format('{:,.0f}').background_gradient(cmap='GnBu', axis=1), use_container_width=True)
+                        except Exception:
+                            st.dataframe(matrix.style.format('{:,.0f}'), use_container_width=True)
             else:
                 st.info("No CRM data found.")
 

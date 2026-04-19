@@ -5,7 +5,7 @@ import plotly.express as px
 import os
 
 # ==========================================
-# 0. 页面配置与 UI 样式 
+# 0. 页面配置与 UI 样式
 # ==========================================
 st.set_page_config(page_title="Iraq Executive CRM & BI", layout="wide", initial_sidebar_state="expanded")
 
@@ -21,31 +21,24 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 💡 强力修复 1：启用全新命名的终极数据库
-DB_NAME = 'marsriva_iraq_ultimate_v10.db'
+# 💡 防崩溃升级 4：更换全新数据库名，彻底避开云端缓存
+DB_NAME = 'marsriva_iraq_final_secure_v1.db'
 
 def get_db_connection():
-    return sqlite3.connect(DB_NAME, check_same_thread=False)
+    return sqlite3.connect(DB_NAME, timeout=10, check_same_thread=False)
 
 def init_db():
-    conn = get_db_connection()
-    c = conn.cursor()
-    # 创建表
-    c.execute('''CREATE TABLE IF NOT EXISTS sell_through (
-                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                 sale_date DATE, client_name TEXT, category TEXT, model TEXT, sold_qty REAL, source_tag TEXT)''')
-    
-    # 💡 强力修复 2：自愈程序！强制检查有没有 model 列，没有就炸掉重建！
-    c.execute("PRAGMA table_info(sell_through)")
-    columns = [info[1] for info in c.fetchall()]
-    if 'model' not in columns:
-        c.execute("DROP TABLE sell_through")
-        c.execute('''CREATE TABLE sell_through (
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS sell_through (
                      id INTEGER PRIMARY KEY AUTOINCREMENT,
                      sale_date DATE, client_name TEXT, category TEXT, model TEXT, sold_qty REAL, source_tag TEXT)''')
-    
-    conn.commit()
-    conn.close()
+        conn.commit()
+    except Exception as e:
+        st.error(f"Database Initialization Error: {e}")
+    finally:
+        conn.close()
 
 init_db()
 
@@ -62,67 +55,77 @@ COLUMN_MAP = {
 # ==========================================
 st.sidebar.markdown("## ⚙️ Management")
 
-# 核弹级清空按钮
+# 💡 防崩溃升级 1：绝对安全的清空逻辑 (只删数据不删表，杜绝 no such table)
 if st.sidebar.button("🗑️ Clear All Data (Reset System)", type="primary", use_container_width=True):
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("DROP TABLE IF EXISTS sell_through") 
-    conn.commit()
-    conn.close()
-    init_db() 
-    st.sidebar.success("System Reset & Database Cleared!")
-    st.rerun()
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("DELETE FROM sell_through")
+        conn.commit()
+        conn.close()
+        st.sidebar.success("System Reset & Database Cleared!")
+        st.rerun()
+    except Exception as e:
+        st.sidebar.error(f"Clear Error: {e}")
 
 st.sidebar.markdown("---")
 
-# 数据上传区
-st.sidebar.markdown("### 📥 Import Data")
-source_tag = st.sidebar.text_input("Batch Name", placeholder="e.g., Q2_Sales")
-uploaded_file = st.sidebar.file_uploader("Upload Excel/CSV", type=["xlsx", "csv"])
+# 💡 防崩溃升级 3：专属表单导入 (防止网络延迟导致按钮状态消失)
+with st.sidebar.form("data_import_form", clear_on_submit=True):
+    st.markdown("### 📥 Import Data")
+    source_tag = st.text_input("Batch Name", placeholder="e.g., Q2_Sales")
+    uploaded_file = st.file_uploader("Upload Excel/CSV", type=["xlsx", "csv"])
+    submit_btn = st.form_submit_button("Confirm Import ✔️")
 
-if uploaded_file:
-    try:
-        temp_df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-        temp_df = temp_df.rename(columns=COLUMN_MAP)
-        
-        # 容错：如果没有 model 列，自动补齐
-        if 'model' not in temp_df.columns: temp_df['model'] = "Unknown"
-        
-        req_cols = ['sale_date', 'client_name', 'category', 'sold_qty']
-        missing_cols = [c for c in req_cols if c not in temp_df.columns]
-        
-        if not missing_cols:
-            temp_df['sale_date'] = pd.to_datetime(temp_df['sale_date']).dt.strftime('%Y-%m-%d')
-            if st.sidebar.button("Confirm Import ✔️", use_container_width=True):
+    if submit_btn and uploaded_file:
+        try:
+            temp_df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
+            temp_df = temp_df.rename(columns=COLUMN_MAP)
+
+            if 'model' not in temp_df.columns: temp_df['model'] = "Unknown"
+
+            req_cols = ['sale_date', 'client_name', 'category', 'sold_qty']
+            missing_cols = [c for c in req_cols if c not in temp_df.columns]
+
+            if not missing_cols:
+                # 容错：遇到乱码日期不报错，直接跳过
+                temp_df['sale_date'] = pd.to_datetime(temp_df['sale_date'], errors='coerce').dt.strftime('%Y-%m-%d')
                 temp_df['source_tag'] = source_tag if source_tag else "Batch"
+                
                 conn = get_db_connection()
-                # 这一步现在绝对不会报错了，因为自愈程序保证了表结构完美！
                 temp_df[['sale_date', 'client_name', 'category', 'model', 'sold_qty', 'source_tag']].to_sql("sell_through", conn, if_exists='append', index=False)
                 conn.close()
+                st.success("Data Imported Successfully!")
                 st.rerun()
-        else:
-            st.sidebar.error(f"Missing columns! Ensure your file has: {req_cols}")
-    except Exception as e:
-        st.sidebar.error(f"Error during file processing: {e}")
+            else:
+                st.error(f"Missing columns! Ensure your file has: {req_cols}")
+        except Exception as e:
+            st.error(f"Error during file processing: {e}")
 
 # ==========================================
 # 2. 核心分析逻辑
 # ==========================================
 st.title("📈 Iraq Executive BI & CRM Radar")
 
-conn = get_db_connection()
-raw_df = pd.read_sql("SELECT * FROM sell_through", conn)
-conn.close()
+# 读取数据库 (加入终极异常兜底)
+try:
+    conn = get_db_connection()
+    raw_df = pd.read_sql("SELECT * FROM sell_through", conn)
+    conn.close()
+except Exception as e:
+    st.error(f"Failed to read database: {e}")
+    raw_df = pd.DataFrame() 
 
 if raw_df.empty:
     st.info("👈 System is ready. Please upload your sales data via the sidebar to activate the dashboard.")
 else:
-    raw_df['sale_date'] = pd.to_datetime(raw_df['sale_date'])
+    raw_df['sale_date'] = pd.to_datetime(raw_df['sale_date'], errors='coerce')
+    raw_df = raw_df.dropna(subset=['sale_date']) # 自动剔除损坏的日期
     
     st.markdown('<div class="filter-card">', unsafe_allow_html=True)
     c1, c2, c3 = st.columns(3)
-    sel_cats = c1.multiselect("Category Filter", sorted(raw_df['category'].unique()), default=raw_df['category'].unique())
-    sel_clients = c2.multiselect("Client Filter", sorted(raw_df['client_name'].unique()), default=raw_df['client_name'].unique())
+    sel_cats = c1.multiselect("Category Filter", sorted(raw_df['category'].dropna().unique()), default=raw_df['category'].dropna().unique())
+    sel_clients = c2.multiselect("Client Filter", sorted(raw_df['client_name'].dropna().unique()), default=raw_df['client_name'].dropna().unique())
     time_gran = c3.selectbox("Time Resolution", ["Monthly", "Quarterly"])
     res_code = 'M' if time_gran == "Monthly" else 'Q'
     st.markdown('</div>', unsafe_allow_html=True)
@@ -151,7 +154,6 @@ else:
             fig.update_layout(xaxis_title="Time", yaxis_title="Volume Sold")
             st.plotly_chart(fig, use_container_width=True)
 
-        # ★ 核心 CRM 面板 
         with tab2:
             st.markdown("### 📊 Client Deployment Matrix (Inv vs Bat)")
             crm_df = f_df[f_df['category'].str.contains('Inverter|Battery', case=False, na=False)].copy()
@@ -167,7 +169,11 @@ else:
                 client_pivot = client_pivot.sort_values('Total', ascending=False)
                 client_pivot['Ratio (1:X)'] = client_pivot.apply(lambda r: f"1:{round(r['Battery']/r['Inverter'],1)}" if r['Inverter']>0 else "N/A", axis=1)
                 
-                st.dataframe(client_pivot.style.format('{:,.0f}', subset=['Inverter', 'Battery', 'Total']).background_gradient(cmap='Blues', subset=['Total']), use_container_width=True)
+                # 💡 防崩溃升级 2：绝对安全的渐变色护盾。如果没有包，自动降级为白底黑字，绝不报错
+                try:
+                    st.dataframe(client_pivot.style.format('{:,.0f}', subset=['Inverter', 'Battery', 'Total']).background_gradient(cmap='Blues', subset=['Total']), use_container_width=True)
+                except Exception:
+                    st.dataframe(client_pivot.style.format('{:,.0f}', subset=['Inverter', 'Battery', 'Total']), use_container_width=True)
                 
                 st.divider()
                 st.markdown("#### 🔍 Double-click expander for Client Deep-Dive")
@@ -184,7 +190,10 @@ else:
                             st.plotly_chart(pie, use_container_width=True, key=f"pie_{client}")
                         with col_t:
                             model_pv = c_detail.pivot_table(index='Period', columns='model', values='sold_qty', aggfunc='sum', fill_value=0)
-                            st.dataframe(model_pv.style.format('{:,.0f}').background_gradient(cmap='Blues'), use_container_width=True)
+                            try:
+                                st.dataframe(model_pv.style.format('{:,.0f}').background_gradient(cmap='Blues'), use_container_width=True)
+                            except Exception:
+                                st.dataframe(model_pv.style.format('{:,.0f}'), use_container_width=True)
             else:
                 st.info("No Inverter or Battery sales data found in the current selection.")
 

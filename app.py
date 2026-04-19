@@ -6,20 +6,16 @@ import plotly.graph_objects as go
 import os
 
 # ==========================================
-# 0. Marsriva Executive BI UI (Times New Roman & Slate Grey Edition)
+# 0. Marsriva Executive BI UI 
 # ==========================================
 st.set_page_config(page_title="Iraq Sell Through Performance", layout="wide", initial_sidebar_state="collapsed")
 
-# 强制新罗马字体，下降颜色替换为极其专业冷静的石板灰 (#475569)
+# 修复了导致重叠的 CSS，去除了全局 * 选择器，并保留了核心的高级配色
 st.markdown("""
 <style>
-    * { font-family: 'Times New Roman', Times, serif !important; }
-    
-    .stApp { background-color: #f1f5f9; }
+    .stApp { font-family: 'Times New Roman', Times, serif; background-color: #f1f5f9; }
     .stButton>button { background-color: #00B2A9; color: white; border-radius: 6px; border: none; font-weight: bold; transition: all 0.3s ease; }
     .stButton>button:hover { background-color: #008f87; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,178,169,0.3); }
-    h1, h2, h3 { color: #0f172a; font-weight: 700; }
-    h1 span { color: #00B2A9; }
     
     .filter-card { background-color: white; padding: 20px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); margin-bottom: 20px; }
     
@@ -30,7 +26,7 @@ st.markdown("""
     .kpi-title { font-size: 0.95rem; color: #64748b; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 5px; }
     .kpi-value { font-size: 2.2rem; color: #1e293b; font-weight: 800; }
     
-    /* 增长为品牌青色，下降为冷静的高级石板灰 */
+    /* 增长为品牌青色，下降为高级石板灰 */
     .kpi-trend-up { color: #00B2A9; font-weight: bold; font-size: 1rem; margin-top: 5px; }
     .kpi-trend-down { color: #475569; font-weight: bold; font-size: 1rem; margin-top: 5px; } 
 </style>
@@ -47,6 +43,7 @@ def get_db_connection():
 def init_db():
     conn = get_db_connection()
     c = conn.cursor()
+    # 彻底移除了 power_segment 字段
     c.execute('''CREATE TABLE IF NOT EXISTS sell_through (
                  id INTEGER PRIMARY KEY AUTOINCREMENT,
                  sale_date DATE, client_name TEXT, category TEXT, model TEXT, sold_qty REAL, source_tag TEXT)''')
@@ -79,7 +76,8 @@ conn.close()
 # 2. Performance Dashboard
 # ==========================================
 if menu == "📈 Performance Dashboard":
-    st.markdown("<h1>Iraq Reseller & Installer <span>Sell Through Performance</span></h1>", unsafe_allow_html=True)
+    # 替换为原生标题，彻底解决重叠问题
+    st.title("📈 Iraq Reseller Sell Through Performance")
     
     if raw_df.empty:
         st.warning("Data terminal is empty. Please navigate to the 'Data Terminal' to upload source files.")
@@ -197,6 +195,7 @@ if menu == "📈 Performance Dashboard":
                 st.markdown("### Product Growth Trajectory")
                 st.caption("Select specific dimensions to view their overall growth trend.")
                 
+                # 去除了功率段筛选器，只保留类目和型号
                 c_t1, c_t2 = st.columns(2)
                 with c_t1:
                     t_cat = st.selectbox("Select Category", ["All"] + sorted(f_df['category'].unique().tolist()))
@@ -248,7 +247,6 @@ if menu == "📈 Performance Dashboard":
                     monthly_detail.rename(columns={'client_name': 'Client', 'sale_date': 'Month'}, inplace=True)
                     monthly_detail = monthly_detail.sort_values(by=['Client', 'Month'])
                     
-                    # 动态生成只针对数字列的千位符格式化字典
                     format_dict = {col: '{:,.0f}' for col in monthly_detail.columns if col not in ['Client', 'Month']}
                     st.dataframe(monthly_detail.style.format(format_dict), use_container_width=True, height=500)
                 else:
@@ -258,23 +256,20 @@ if menu == "📈 Performance Dashboard":
 # 3. Data Terminal
 # ==========================================
 elif menu == "📤 Data Terminal":
-    st.markdown("<h1>Data <span>Terminal</span></h1>", unsafe_allow_html=True)
+    # 替换为原生标题，彻底解决重叠问题
+    st.title("📤 Data Terminal")
     
-    # --- 新增：清除数据功能 ---
-    st.markdown("### 🛠️ Database Management")
-    with st.expander("⚠️ Danger Zone: Clear Database"):
-        st.warning("This action will completely erase all imported records from the database. It cannot be undone.")
-        if st.button("🗑️ Clear All Data", type="primary", use_container_width=True):
-            conn = get_db_connection()
-            c = conn.cursor()
-            c.execute("DELETE FROM sell_through")
-            conn.commit()
-            conn.close()
-            st.success("All data has been successfully cleared! You can now upload fresh data.")
-            st.rerun()
+    # --- 唯一的清除按钮（无多余折叠面板） ---
+    if st.button("🗑️ Clear All Database Data (一键清空数据)", type="primary"):
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("DELETE FROM sell_through")
+        conn.commit()
+        conn.close()
+        st.success("All data has been successfully cleared! 数据库已彻底清空！")
+        st.rerun()
             
     st.markdown("---")
-    st.markdown("### 📥 Import New Data")
     
     with st.container():
         st.markdown('<div class="filter-card">', unsafe_allow_html=True)
@@ -311,7 +306,7 @@ elif menu == "📤 Data Terminal":
                     temp_df['source_tag'] = source_tag
                     conn = get_db_connection()
                     
-                    # 容错提取：只保存数据库需要的且临时表里实际存在的列 (去除了 power_segment)
+                    # 容错提取：只保存数据库需要的列，彻底去除了 power_segment
                     db_cols = ['sale_date', 'client_name', 'category', 'model', 'sold_qty', 'source_tag']
                     cols_to_save = [c for c in db_cols if c in temp_df.columns]
                     

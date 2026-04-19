@@ -82,7 +82,7 @@ if uploaded_file:
                 conn.close()
                 st.rerun()
         else:
-            st.sidebar.error(f"Missing required columns!")
+            st.sidebar.error(f"Missing required columns! Required: {req_cols}")
     except Exception as e:
         st.sidebar.error(f"Error: {e}")
 
@@ -133,7 +133,7 @@ else:
             fig = px.line(trend_df, x='sale_date', y='sold_qty', color='category', markers=True, template="plotly_white")
             st.plotly_chart(fig, use_container_width=True)
 
-        # ★ 核心 CRM 面板 (带比例分析和蓝色渐变)
+        # ★ 核心 CRM 面板 (修复了饼状图的 TypeError Bug)
         with tab2:
             st.markdown("### 📊 Client Deployment Matrix (Inv vs Bat)")
             crm_df = f_df[f_df['category'].str.contains('Inverter|Battery', case=False, na=False)].copy()
@@ -147,7 +147,7 @@ else:
             client_pivot = client_pivot.sort_values('Total', ascending=False)
             client_pivot['Ratio (1:X)'] = client_pivot.apply(lambda r: f"1:{round(r['Battery']/r['Inverter'],1)}" if r['Inverter']>0 else "N/A", axis=1)
             
-            # 显示主表
+            # 显示主表 (带渐变色)
             st.dataframe(client_pivot.style.format('{:,.0f}', subset=['Inverter', 'Battery', 'Total']).background_gradient(cmap='Blues', subset=['Total']), use_container_width=True)
             
             st.divider()
@@ -159,9 +159,12 @@ else:
                     
                     col_p, col_t = st.columns([1, 2])
                     with col_p:
-                        pie = px.pie(c_detail.groupby('Type')['sold_qty'].sum().reset_index(), values='sold_qty', names='Type', hole=0.5, color_discrete_map={'Inverter':'#0f172a','Battery':'#00B2A9'})
+                        # 💡 就在这里！补上了关键的 color='Type'
+                        pie_data = c_detail.groupby('Type')['sold_qty'].sum().reset_index()
+                        pie = px.pie(pie_data, values='sold_qty', names='Type', color='Type', hole=0.5, color_discrete_map={'Inverter':'#0f172a','Battery':'#00B2A9'})
                         pie.update_layout(showlegend=False, height=200, margin=dict(t=0,b=0,l=0,r=0))
                         st.plotly_chart(pie, use_container_width=True, key=f"pie_{client}")
+                        
                     with col_t:
                         model_pv = c_detail.pivot_table(index='Period', columns='model', values='sold_qty', aggfunc='sum', fill_value=0)
                         # 渐变色明细表
@@ -174,9 +177,13 @@ else:
                 curr, prev = p_df.columns[-1], p_df.columns[-2]
                 p_df['Drop'] = p_df[curr] - p_df[prev]
                 decline = p_df[p_df['Drop'] < 0].sort_values('Drop')
-                st.dataframe(decline[['Drop']].style.format('{:,.0f}').map(lambda x: 'color: red; font-weight: bold;'), use_container_width=True)
-                fig_alert = px.bar(decline.reset_index().head(10), x='Drop', y='client_name', orientation='h', color_discrete_sequence=['#ef4444'])
-                st.plotly_chart(fig_alert, use_container_width=True)
+                
+                if not decline.empty:
+                    st.dataframe(decline[['Drop']].style.format('{:,.0f}').map(lambda x: 'color: red; font-weight: bold;'), use_container_width=True)
+                    fig_alert = px.bar(decline.reset_index().head(10), x='Drop', y='client_name', orientation='h', color_discrete_sequence=['#ef4444'])
+                    st.plotly_chart(fig_alert, use_container_width=True)
+                else:
+                    st.success("Great news! No clients showed a decline in volume.")
             else: st.info("Need at least 2 periods for decline analysis.")
 
         with tab4:

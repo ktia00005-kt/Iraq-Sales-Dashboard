@@ -24,7 +24,7 @@ st.markdown(f"""
 </style>
 """, unsafe_allow_html=True)
 
-# 强制换用 v14 数据库，摆脱所有缓存干扰
+# 沿用极其稳定的 v14 数据库
 DB_NAME = 'marsriva_iraq_v14_bulletproof.db'
 
 def get_db_connection():
@@ -75,8 +75,6 @@ with st.sidebar.form("import_form", clear_on_submit=True):
     if submit_btn and uploaded_file:
         try:
             temp_df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-            
-            # 清除所有空格和换行
             temp_df.columns = temp_df.columns.astype(str).str.strip().str.lower().str.replace('\n', '').str.replace('\r', '')
             temp_df = temp_df.rename(columns=COLUMN_MAP)
             
@@ -140,20 +138,12 @@ else:
             
             with col_r:
                 st.markdown("#### Overall Mix (Inv vs Bat)")
-                # 💡 核物理级防崩溃：全新且绝对安全的饼图生成方式
                 market_source = f_df[f_df['category'].fillna('').str.contains('Inverter|Battery', case=False)].copy()
                 
                 if len(market_source) > 0:
-                    # 使用纯 Python 列表，绝对不会触发 DataFrame 列报错
                     clean_types = ['Inverter' if 'inv' in str(c).lower() else 'Battery' for c in market_source['category']]
-                    
-                    # 凭空捏造一个干净的数据框来画图，彻底断绝联系
-                    safe_pie_df = pd.DataFrame({
-                        'Product_Type': clean_types,
-                        'Qty': market_source['sold_qty'].values
-                    })
+                    safe_pie_df = pd.DataFrame({'Product_Type': clean_types, 'Qty': market_source['sold_qty'].values})
                     pie_summary = safe_pie_df.groupby('Product_Type', as_index=False)['Qty'].sum()
-                    
                     st.plotly_chart(px.pie(pie_summary, values='Qty', names='Product_Type', hole=0.5, color='Product_Type', color_discrete_map={'Inverter': DARK_COLOR, 'Battery': BRAND_COLOR}), use_container_width=True)
                 else:
                     st.info("No Inv/Bat data found for ratio chart.")
@@ -167,25 +157,56 @@ else:
             except Exception:
                 st.dataframe(monthly_tbl.style.format('{:,.0f}'), use_container_width=True)
 
+        # ==========================================
+        # TAB 2: CRM Matrix (核心升级区域)
+        # ==========================================
         with tab2:
-            st.markdown("### 📋 Executive CRM: Model-Time Matrix")
+            st.markdown("### 📋 Executive CRM: Client Ranking & Matrix")
             crm_df = f_df[f_df['category'].fillna('').str.contains('Inverter|Battery', case=False)].copy()
             
             if not crm_df.empty:
-                # 极度安全的重命名和配比逻辑
+                # 1. 数据拆分：将 category 归类为 Inverter 和 Battery
                 crm_df['Product_Type'] = ['Inverter' if 'inv' in str(c).lower() else 'Battery' for c in crm_df['category']]
                 
-                # 总体排名
-                client_rank = crm_df.groupby('client_name')['sold_qty'].sum().sort_values(ascending=False).reset_index()
-                client_rank.columns = ['Client', 'Total Inv & Bat Volume']
-                st.dataframe(client_rank.style.format({'Total Inv & Bat Volume': '{:,.0f}'}), use_container_width=True)
+                # 2. 透视计算每个客户的逆变器和电池销量
+                client_pivot = crm_df.groupby(['client_name', 'Product_Type'])['sold_qty'].sum().unstack(fill_value=0)
+                if 'Inverter' not in client_pivot.columns: client_pivot['Inverter'] = 0
+                if 'Battery' not in client_pivot.columns: client_pivot['Battery'] = 0
+                
+                # 3. 计算总计并排序
+                client_pivot['Total Volume'] = client_pivot['Inverter'] + client_pivot['Battery']
+                client_pivot = client_pivot.sort_values('Total Volume', ascending=False).reset_index()
+                client_pivot.rename(columns={'client_name': 'Client'}, inplace=True)
+                
+                # 4. 计算配比 (Ratio)
+                def calculate_ratio(inv, bat):
+                    if inv > 0: return f"1 : {round(bat/inv, 1)}"
+                    if bat > 0: return "0 : All Battery"
+                    return "0 : 0"
+                client_pivot['Ratio (Inv:Bat)'] = client_pivot.apply(lambda r: calculate_ratio(r['Inverter'], r['Battery']), axis=1)
+                
+                # 5. 展示顶部的全客户排行榜
+                st.markdown("#### 🏆 Client Ranking (All Clients)")
+                st.dataframe(
+                    client_pivot[['Client', 'Inverter', 'Battery', 'Total Volume', 'Ratio (Inv:Bat)']].style.format({
+                        'Inverter': '{:,.0f}',
+                        'Battery': '{:,.0f}',
+                        'Total Volume': '{:,.0f}'
+                    }),
+                    use_container_width=True,
+                    height=400 # 给一个固定的高度，方便上下滚动查看所有客户
+                )
                 
                 st.markdown("---")
-                for client in client_rank['Client'].unique()[:15]:
-                    with st.expander(f"🏢 {client} | Deep-Dive Model Purchase History"):
+                st.markdown("#### 🔍 Client Deep-Dive (Model Purchase Matrix)")
+                
+                # 6. 循环遍历所有客户展示明细透视表 (移除了条数限制，展示所有人)
+                for client in client_pivot['Client']:
+                    total_vol = client_pivot[client_pivot['Client'] == client]['Total Volume'].values[0]
+                    with st.expander(f"🏢 {client} | Total Volume: {total_vol:,.0f}"):
                         c_detail = crm_df[crm_df['client_name'] == client].copy()
                         c_detail['Period'] = c_detail['sale_date'].dt.to_period(res_code).astype(str)
-                        # 确保 Model 在左侧，Period 在上方
+                        # Model在左侧，日期在上方
                         matrix = c_detail.pivot_table(index='model', columns='Period', values='sold_qty', aggfunc='sum', fill_value=0)
                         try:
                             st.dataframe(matrix.style.format('{:,.0f}').background_gradient(cmap='GnBu', axis=1), use_container_width=True)

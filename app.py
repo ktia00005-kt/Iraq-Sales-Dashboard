@@ -76,9 +76,14 @@ with st.sidebar.form("data_import_form", clear_on_submit=True):
             temp_df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
             temp_df = temp_df.rename(columns=COLUMN_MAP)
             if 'model' not in temp_df.columns: temp_df['model'] = "Unknown"
+            
             req_cols = ['sale_date', 'client_name', 'category', 'sold_qty']
             if all(c in temp_df.columns for c in req_cols):
                 temp_df['sale_date'] = pd.to_datetime(temp_df['sale_date'], errors='coerce').dt.strftime('%Y-%m-%d')
+                
+                # 💡 就是这里！补上了丢失的这一行，不再报错 not in index 了！
+                temp_df['source_tag'] = source_tag if source_tag else "Batch"
+                
                 conn = get_db_connection()
                 temp_df[['sale_date', 'client_name', 'category', 'model', 'sold_qty', 'source_tag']].to_sql("sell_through", conn, if_exists='append', index=False)
                 conn.close()
@@ -132,7 +137,7 @@ else:
         with tab1:
             col_m1, col_m2 = st.columns([1.5, 1])
             
-            # 1. 总体配比饼图 (💡 这里加了防崩溃保护罩)
+            # 1. 总体配比饼图 (防崩溃保护)
             with col_m2:
                 st.markdown("#### Overall Purchase Ratio")
                 market_crm = f_df[f_df['category'].str.contains('Inverter|Battery', case=False, na=False)].copy()
@@ -146,7 +151,7 @@ else:
                 else:
                     st.info("No Inverter or Battery data available for pie chart.")
 
-            # 2. 趋势线 (增加了超多备选颜色，防止多类目崩溃)
+            # 2. 趋势线
             with col_m1:
                 st.markdown(f"#### Sales Trajectory ({time_gran})")
                 trend_df = f_df.groupby([f_df['sale_date'].dt.to_period(res_code).astype(str), 'category'])['sold_qty'].sum().reset_index()
@@ -156,7 +161,7 @@ else:
                 fig_line.update_layout(template="plotly_white", height=350, xaxis_title="", yaxis_title="Units Sold")
                 st.plotly_chart(fig_line, use_container_width=True)
 
-            # 3. 月度采购量明细表
+            # 3. 月度采购量明细表 
             st.divider()
             st.markdown("#### Monthly Sales Volume Data Table")
             monthly_table = f_df.groupby([f_df['sale_date'].dt.to_period('M').astype(str), 'category'])['sold_qty'].sum().unstack(fill_value=0)
@@ -190,6 +195,7 @@ else:
                         c_detail = crm_df[crm_df['client_name'] == client].copy()
                         c_detail['Period'] = c_detail['sale_date'].dt.to_period(res_code).astype(str)
                         
+                        # 💡 竖向排列 Model，横向排列表格日期
                         model_matrix = c_detail.pivot_table(index='model', columns='Period', values='sold_qty', aggfunc='sum', fill_value=0)
                         try:
                             st.dataframe(model_matrix.style.format('{:,.0f}').background_gradient(cmap='GnBu', axis=1), use_container_width=True)
@@ -212,4 +218,7 @@ else:
                     st.error(f"Clients with decreased volume in {curr} compared to {prev}")
                     st.dataframe(decline[['Drop']].style.format('{:,.0f}'), use_container_width=True)
                     st.plotly_chart(px.bar(decline.reset_index().head(10), x='Drop', y='client_name', orientation='h', color_discrete_sequence=['#ef4444']), use_container_width=True)
-            else: st.info("Need more data periods.")
+                else:
+                    st.success("Great news! No clients showed a decline in volume.")
+            else: 
+                st.info("Need more data periods to calculate decline.")
